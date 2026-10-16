@@ -101,14 +101,26 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .notice.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{transform:scale(.9)}25%{transform:scale(1.05)}100%{transform:scale(1)}}
 @media (prefers-reduced-motion:reduce){.notice.flash{animation:none}}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.logo{height:64px;width:auto;max-width:180px;object-fit:contain;flex:none}
+.logo-preview{height:40px;width:auto;max-width:120px;object-fit:contain;border:1px solid var(--line);border-radius:8px;padding:4px;background:#fff}
+.ticket-logo{height:52px;width:auto;max-width:160px;object-fit:contain;align-self:flex-start;background:#fff;border-radius:10px;padding:6px;margin-bottom:6px}
+.credit{text-align:center;font-size:.8rem;color:var(--muted);padding-top:8px}
+.heart{color:#e0245e;font-size:1em}
+:root[data-theme="dark"] .heart{color:#ff4d7d}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .heart{color:#ff4d7d}}
+@media (max-width:520px){.logo{height:44px}}
 </style>
 </head>
 <body>
 <div class="wrap" id="app">
   <div class="top">
-    <div>
-      <div class="eyebrow" id="eyebrow">Host board</div>
-      <h1 id="eventTitle">Hall Raffle</h1>
+    <div class="brand">
+      <img id="eventLogo" class="logo" alt="Event logo" hidden>
+      <div>
+        <div class="eyebrow" id="eyebrow">Host board</div>
+        <h1 id="eventTitle">Hall Raffle</h1>
+      </div>
     </div>
     <div class="row" id="hostTopActions">
       <button class="link" id="fullscreenBtn">Full screen</button>
@@ -134,6 +146,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
             <label class="small" for="titleInput">Event name (shown on phones too)</label>
             <input type="text" id="titleInput" maxlength="60" placeholder="Hall Raffle">
             <div class="row"><button id="saveSettings" class="primary">Save</button><span class="small" id="settingsMsg"></span></div>
+            <span class="small">Event logo</span>
+            <div class="row">
+              <img id="logoPreview" class="logo-preview" alt="Current logo" hidden>
+              <button id="logoBtn">Upload logo</button>
+              <button class="link" id="logoRemove" hidden>Remove</button>
+              <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif" hidden>
+            </div>
+            <span class="small" id="logoMsg">PNG, JPG or SVG. Shows on this screen and on phones.</span>
             <label class="small" for="joinLink">Join link</label>
             <input type="text" id="joinLink" readonly>
             <label class="small" for="hostLink">Host link (open this on another laptop to run the same raffle)</label>
@@ -250,6 +270,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   <section id="joinView" hidden>
     <div class="ticket">
       <div class="ticket-head">
+        <img id="joinLogo" class="ticket-logo" alt="Event logo" hidden>
         <div class="eyebrow">Admit one</div>
         <h1 id="joinTitle" style="font-size:1.6rem">Hall Raffle</h1>
       </div>
@@ -274,6 +295,8 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       </div>
     </div>
   </section>
+
+  <footer class="credit">Made by Vishal with <span class="heart" role="img" aria-label="love">&#9829;</span></footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -632,7 +655,47 @@ window.MusicStore = {
     };
     $("saveSettings").onclick=()=>{ title=clean($("titleInput").value).slice(0,60)||"Hall Raffle"; save(); render(); announce(); $("settingsMsg").textContent="Saved."; };
 
-    render(); announce();
+    /* ---- event logo: full size for this screen, a tiny copy for phones ---- */
+    let logo = store.get("raffle.logo", null);   // {big, small}; kept across raffles on this laptop
+    function showLogo(){
+      const has=!!(logo&&logo.big);
+      ["eventLogo","logoPreview"].forEach(id=>{ $(id).hidden=!has; if(has) $(id).src=logo.big; });
+      $("logoRemove").hidden=!has; $("logoBtn").textContent = has ? "Replace logo" : "Upload logo";
+    }
+    function announceLogo(){ post(topic+"-w",{k:"logo",data: logo&&logo.small ? logo.small : ""}).catch(()=>{}); }
+    function loadImage(file){ return new Promise((res,rej)=>{ const u=URL.createObjectURL(file), im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error("bad image")); im.src=u; }); }
+    function shrink(im, max, type, q, bg){
+      const w=im.naturalWidth||im.width||max, h=im.naturalHeight||im.height||max, s=Math.min(1,max/Math.max(w,h));
+      const c=document.createElement("canvas"); c.width=Math.max(1,Math.round(w*s)); c.height=Math.max(1,Math.round(h*s));
+      const x=c.getContext("2d"); if(bg){ x.fillStyle=bg; x.fillRect(0,0,c.width,c.height); }
+      x.drawImage(im,0,0,c.width,c.height); return c.toDataURL(type,q);
+    }
+    function smallCopy(im){
+      // ntfy messages must stay under ~4 KB, so step down size and quality until it fits
+      for(const max of [160,128,112,96,80,64,48]) for(const q of [0.8,0.6,0.45]){
+        let d=shrink(im,max,"image/webp",q);
+        if(!d.startsWith("data:image/webp")) d=shrink(im,max,"image/png");
+        if(d.length>3300) d=shrink(im,max,"image/jpeg",q,"#ffffff");
+        if(d.length<=3300) return d;
+      }
+      return "";
+    }
+    $("logoBtn").onclick=()=>$("logoFile").click();
+    $("logoFile").onchange=async()=>{
+      const f=$("logoFile").files[0]; $("logoFile").value=""; if(!f) return;
+      if(!/^image\//.test(f.type)){ $("logoMsg").textContent="That file isn't an image. Pick a PNG, JPG or SVG."; return; }
+      try{
+        const im=await loadImage(f);
+        let big=shrink(im,640,"image/webp",0.9); if(!big.startsWith("data:image/webp")) big=shrink(im,640,"image/png");
+        const small=smallCopy(im);
+        logo={big,small}; store.set("raffle.logo",logo); showLogo(); announceLogo();
+        $("logoMsg").textContent = small ? "Logo added. Phones will show it too." : "Logo added on this screen. It's too detailed to send to phones, so they'll show the name only.";
+      }catch(_){ $("logoMsg").textContent="Couldn't read that image. Try a PNG or JPG."; }
+    };
+    $("logoRemove").onclick=()=>{ logo=null; store.set("raffle.logo",null); showLogo(); announceLogo(); $("logoMsg").textContent="Logo removed."; };
+    showLogo();
+
+    render(); announce(); announceLogo();
   }
 
   /* ================= ATTENDEE ================= */
@@ -670,6 +733,12 @@ window.MusicStore = {
       lw.classList.remove("flash"); void lw.offsetWidth; lw.classList.add("flash");
     }
     listen(topic+"-w",b=>{
+      if(b.k==="logo"){
+        const d=typeof b.data==="string"?b.data:"";
+        const ok=/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(d) && d.length<6000;
+        $("joinLogo").hidden=!ok; if(ok) $("joinLogo").src=d; else $("joinLogo").removeAttribute("src");
+        return;
+      }
       if(b.k!=="state") return;
       state={title:clean(b.title)||"Hall Raffle",winners:Array.isArray(b.winners)?b.winners.slice(0,200):[]};
       render();
