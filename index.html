@@ -93,6 +93,14 @@ details summary{cursor:pointer;font-weight:600}
 .rule{display:flex;flex-direction:column;gap:12px}
 .roll li.dup{opacity:.55;border-style:dashed}
 .dupTag{color:var(--muted);border-color:var(--muted)}
+.fx-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px}
+.fx-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+select{font:inherit;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg);color:var(--ink);min-width:0;flex:1 1 180px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.notice.you-won{background:var(--accent);color:var(--accent-ink);font-family:var(--display);font-size:1.3rem;font-weight:800;text-align:center;padding:18px}
+.notice.flash{animation:flash 1.2s ease-out}
+@keyframes flash{0%{transform:scale(.9)}25%{transform:scale(1.05)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.notice.flash{animation:none}}
 </style>
 </head>
 <body>
@@ -171,6 +179,49 @@ details summary{cursor:pointer;font-weight:600}
       </div>
     </div>
 
+    <div class="panel" style="margin-top:24px" id="fxPanel">
+      <h2>Sound and effects</h2>
+      <div class="fx-grid">
+        <div class="fx-col">
+          <label class="small" for="musicSel">Background music</label>
+          <div class="row">
+            <select id="musicSel">
+              <option value="gameshow">Game show bounce</option>
+              <option value="lofi">Chill lo-fi</option>
+              <option value="party">Party groove</option>
+              <option value="upload" id="uploadOpt" disabled>Your music (upload below)</option>
+            </select>
+            <button id="musicPlay" class="primary">Play music</button>
+          </div>
+          <label class="small" for="musicVol">Music volume</label>
+          <input type="range" id="musicVol" min="0" max="100" value="50">
+          <div class="row">
+            <button id="uploadBtn">Upload your own music</button>
+            <input type="file" id="musicFile" accept="audio/*" hidden>
+          </div>
+          <span class="small" id="musicMsg">MP3, WAV or M4A. It stays on this laptop only.</span>
+        </div>
+        <div class="fx-col">
+          <label class="switch" for="fxDrum">
+            <input type="checkbox" id="fxDrum" role="switch">
+            <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+            <span class="rule-text"><span class="rule-title">Drumroll and fanfare</span><span class="small">Plays during the draw; music dips while it rolls</span></span>
+          </label>
+          <label class="switch" for="fxConfetti">
+            <input type="checkbox" id="fxConfetti" role="switch">
+            <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+            <span class="rule-text"><span class="rule-title">Confetti</span><span class="small">On this screen and on the winner's phone</span></span>
+          </label>
+          <label class="switch" for="fxBlip">
+            <input type="checkbox" id="fxBlip" role="switch">
+            <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+            <span class="rule-text"><span class="rule-title">Sound when someone joins</span><span class="small">A soft ding for each new entry</span></span>
+          </label>
+          <button id="testFx" style="align-self:start">Test drumroll and confetti</button>
+        </div>
+      </div>
+    </div>
+
     <div class="panel" style="margin-top:24px">
       <div class="top"><h2>Entries</h2>
         <div class="row">
@@ -214,6 +265,8 @@ details summary{cursor:pointer;font-weight:600}
           <div class="small">Entered as</div>
           <div class="mine-no" id="myName" style="font-size:1.5rem;font-family:var(--display)"></div>
           <div class="small">Keep this page open to see the winners.</div>
+          <button id="soundOn" hidden style="align-self:start">Turn on winner alerts</button>
+          <div class="small status-ok" id="soundOk" hidden>Winner alerts are on. Turn your ringer up to hear them.</div>
           <button class="link" id="editName" style="align-self:start;padding-left:0">Change my name</button>
         </div>
         <div class="err" id="joinErr" hidden></div>
@@ -224,6 +277,150 @@ details summary{cursor:pointer;font-weight:600}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.js"></script>
+<script>
+/* Sound + confetti for Hall Raffle. Everything is synthesized with Web Audio,
+   so there are no audio files to host. Browsers only allow sound after a tap
+   or click, so Sound.unlock() runs on the first pointer press. */
+window.Sound = (function(){
+  let ctx=null, master, musicBus, duck, sfx, noiseBuf=null;
+  const hz = m => 440*Math.pow(2,(m-69)/12);
+
+  function ac(){
+    if(!ctx){
+      const C = window.AudioContext || window.webkitAudioContext; if(!C) return null;
+      ctx = new C();
+      master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+      duck = ctx.createGain(); duck.connect(master);
+      musicBus = ctx.createGain(); musicBus.gain.value = 0.3; musicBus.connect(duck);
+      sfx = ctx.createGain(); sfx.gain.value = 0.9; sfx.connect(master);
+    }
+    if(ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function ready(){ return !!ctx && ctx.state === "running"; }
+
+  function tone(f,t,d,type,g,dest,attack){
+    const o=ctx.createOscillator(), v=ctx.createGain();
+    o.type=type; o.frequency.setValueAtTime(f,t);
+    v.gain.setValueAtTime(0.0001,t); v.gain.exponentialRampToValueAtTime(g,t+(attack||0.006));
+    v.gain.exponentialRampToValueAtTime(0.0001,t+d);
+    o.connect(v); v.connect(dest); o.start(t); o.stop(t+d+0.05);
+  }
+  function noise(t,d,g,dest,type,freq,q){
+    if(!noiseBuf){ noiseBuf=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate); const c=noiseBuf.getChannelData(0); for(let i=0;i<c.length;i++) c[i]=Math.random()*2-1; }
+    const s=ctx.createBufferSource(); s.buffer=noiseBuf; s.loop=true;
+    const f=ctx.createBiquadFilter(); f.type=type; f.frequency.value=freq; f.Q.value=q||1;
+    const v=ctx.createGain(); v.gain.setValueAtTime(g,t); v.gain.exponentialRampToValueAtTime(0.0001,t+d);
+    s.connect(f); f.connect(v); v.connect(dest); s.start(t,Math.random()*0.5); s.stop(t+d+0.05);
+  }
+  function kick(t,g,dest){
+    const o=ctx.createOscillator(), v=ctx.createGain();
+    o.frequency.setValueAtTime(150,t); o.frequency.exponentialRampToValueAtTime(45,t+0.12);
+    v.gain.setValueAtTime(g,t); v.gain.exponentialRampToValueAtTime(0.0001,t+0.3);
+    o.connect(v); v.connect(dest); o.start(t); o.stop(t+0.35);
+  }
+
+  /* ---------- background music ---------- */
+  const PRESETS = {
+    gameshow:{ bpm:126, root:60, prog:[[0,4,7],[5,9,12],[7,11,14],[5,9,12]],
+      lead:"square", leadGain:0.05, arp:[0,2,4,6,8,10,12,14], bass:"triangle", bassSteps:[0,6,8,14],
+      kick:[0,4,8,12], snare:[4,12], hat:[2,6,10,14], swing:0, pad:false },
+    lofi:{ bpm:74, root:57, prog:[[0,3,7,10],[5,8,12,15],[-2,2,5,9],[3,7,10,14]],
+      lead:"sine", leadGain:0.06, arp:[0,3,6,10,13], bass:"sine", bassSteps:[0,10],
+      kick:[0,7,10], snare:[4,12], hat:[0,2,4,6,8,10,12,14], swing:0.16, pad:true },
+    party:{ bpm:118, root:62, prog:[[0,4,7],[-3,0,4],[5,9,12],[7,11,14]],
+      lead:"sawtooth", leadGain:0.035, arp:[0,3,4,7,8,11,12,15], bass:"square", bassSteps:[0,2,4,6,8,10,12,14],
+      kick:[0,4,8,12], snare:[4,12], hat:[2,6,10,14], swing:0, pad:true }
+  };
+  let preset=null, timer=null, step=0, nextT=0, audioEl=null, elSrc=null, current="off";
+
+  function playStep(p,s,t){
+    const sd=60/p.bpm/4, bar=Math.floor(s/16)%p.prog.length, i=s%16, chord=p.prog[bar];
+    if(i%2===1) t+=p.swing*sd;
+    if(p.kick.includes(i)) kick(t,0.55,musicBus);
+    if(p.snare.includes(i)) noise(t,0.14,0.22,musicBus,"bandpass",1900,0.8);
+    if(p.hat.includes(i)) noise(t,0.035,0.07,musicBus,"highpass",7500);
+    if(p.bassSteps.includes(i)) tone(hz(p.root-24+chord[0]),t,sd*1.8,p.bass,0.22,musicBus);
+    const ai=p.arp.indexOf(i);
+    if(ai>=0) tone(hz(p.root+12+chord[ai%chord.length]),t,sd*1.6,p.lead,p.leadGain,musicBus);
+    if(p.pad && i===0) chord.forEach(n=>tone(hz(p.root+n),t,sd*15,"sine",0.035,musicBus,0.25));
+  }
+  function startSynth(name){
+    preset=PRESETS[name]; step=0; nextT=ctx.currentTime+0.08;
+    timer=setInterval(()=>{
+      while(nextT < ctx.currentTime+0.15){ playStep(preset,step,nextT); nextT+=60/preset.bpm/4; step++; }
+    },25);
+  }
+  function stopMusic(){
+    if(timer){ clearInterval(timer); timer=null; }
+    if(audioEl){ audioEl.pause(); }
+    current="off";
+  }
+  function playMusic(name, fileUrl){
+    if(!ac()) return false;
+    stopMusic();
+    if(name==="upload"){
+      if(!fileUrl) return false;
+      if(!audioEl){ audioEl=new Audio(); audioEl.loop=true; elSrc=ctx.createMediaElementSource(audioEl); elSrc.connect(musicBus); }
+      if(audioEl.src!==fileUrl) audioEl.src=fileUrl;
+      audioEl.currentTime=0; audioEl.play().catch(()=>{});
+    } else if(PRESETS[name]) startSynth(name);
+    else return false;
+    current=name; return true;
+  }
+  function setVolume(v){ if(!ac()) return; musicBus.gain.setTargetAtTime(Math.max(0,Math.min(1,v))*0.6, ctx.currentTime, 0.05); }
+  function duckTo(v,after){ if(!ctx) return; duck.gain.setTargetAtTime(v, ctx.currentTime+(after||0), 0.12); }
+
+  /* ---------- effects ---------- */
+  function drumroll(dur){
+    if(!ac()) return;
+    const t0=ctx.currentTime+0.02; duckTo(0.15);
+    let t=t0, i=0;
+    while(t < t0+dur){
+      const p=(t-t0)/dur, gap=0.085-0.05*p;
+      noise(t,0.06,0.12+0.45*p*p,sfx,"bandpass",2200+600*p,0.9);
+      if(i%2===0) tone(70+30*p,t,0.12,"sine",0.05+0.2*p,sfx);   // low rumble under the snare
+      t+=gap*(0.9+Math.random()*0.2); i++;
+    }
+  }
+  function fanfare(){
+    if(!ac()) return;
+    const t=ctx.currentTime+0.02;
+    kick(t,0.9,sfx);
+    noise(t,2.4,0.5,sfx,"highpass",5200);            // crash cymbal
+    const lp=ctx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=2600; lp.connect(sfx);
+    [60,64,67].forEach((n,k)=>{ tone(hz(n+12),t+k*0.11,0.22,"sawtooth",0.16,lp); });
+    [72,76,79,84].forEach(n=>{ tone(hz(n),t+0.36,1.5,"sawtooth",0.1,lp,0.02); tone(hz(n),t+0.36,1.5,"square",0.04,lp,0.02); });
+    duckTo(1,2.6);
+  }
+  function chime(){ if(!ready()) return; const t=ctx.currentTime+0.01; tone(hz(81),t,0.5,"sine",0.25,sfx); tone(hz(88),t+0.12,0.8,"sine",0.22,sfx); }
+  function blip(){ if(!ready()) return; const t=ctx.currentTime+0.01; tone(hz(84),t,0.12,"sine",0.12,sfx); tone(hz(91),t+0.07,0.16,"sine",0.1,sfx); }
+
+  return { unlock:ac, ready, playMusic, stopMusic, setVolume, drumroll, fanfare, chime, blip,
+           isPlaying:()=>current!=="off", presets:Object.keys(PRESETS) };
+})();
+
+window.celebrate = function(big){
+  if(typeof confetti!=="function") return;
+  const colors=["#e2531f","#ffb703","#2a9d8f","#4361ee","#f72585","#ffffff"];
+  const opts={colors,disableForReducedMotion:true,zIndex:1000};
+  confetti(Object.assign({particleCount:big?180:90,spread:100,startVelocity:45,origin:{y:0.45}},opts));
+  const end=Date.now()+(big?2600:1200);
+  (function frame(){
+    confetti(Object.assign({particleCount:5,angle:60,spread:65,origin:{x:0,y:0.75}},opts));
+    confetti(Object.assign({particleCount:5,angle:120,spread:65,origin:{x:1,y:0.75}},opts));
+    if(Date.now()<end) requestAnimationFrame(frame);
+  })();
+};
+
+/* Uploaded music is kept in this browser (IndexedDB) so it survives a refresh. */
+window.MusicStore = {
+  _db(){ return new Promise((res,rej)=>{ try{ const r=indexedDB.open("hallraffle",1); r.onupgradeneeded=()=>r.result.createObjectStore("files"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }catch(e){ rej(e); } }); },
+  async put(file){ try{ const db=await this._db(); await new Promise((res,rej)=>{ const tx=db.transaction("files","readwrite"); tx.objectStore("files").put({name:file.name,blob:file},"music"); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); return true; }catch(_){ return false; } },
+  async get(){ try{ const db=await this._db(); return await new Promise((res)=>{ const r=db.transaction("files").objectStore("files").get("music"); r.onsuccess=()=>res(r.result||null); r.onerror=()=>res(null); }); }catch(_){ return null; } }
+};
+</script>
 <script>
 (function(){
   /* No-login relay: ntfy.sh. Phones POST entries to a random topic; the host
@@ -297,12 +494,14 @@ details summary{cursor:pointer;font-weight:600}
     if(typeof QRCode!=="undefined") new QRCode($("qr"),{text:joinUrl,width:600,height:600,colorDark:"#151a2b",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
     else $("qr").textContent="Open this link on your phone: "+joinUrl;
 
+    let hostLive=false; setTimeout(()=>hostLive=true,2500); // don't ding for the replay of earlier entries
     listen(topic,(b,at)=>{
       if(b.k==="entry"){
         const id=String(b.d||"").slice(0,40), name=clean(b.n);
         if(!id||!name) return;
         const prev=entries[id];
         if(prev && (prev.at||0)>at) return;
+        if(!prev && hostLive && fx.blip) Sound.blip();
         entries[id]={name, at: prev?prev.first:at, first: prev?prev.first:at};
         entries[id].at=at; save(); render();
       } else if(b.k==="title"){ /* own echo */ }
@@ -360,16 +559,61 @@ details summary{cursor:pointer;font-weight:600}
       $("drawBtn").disabled=rolling||pool().length===0;
     }
 
-    function announce(){ post(topic+"-w",{k:"state",title,winners:winners.map(w=>({id:w.id,name:w.name}))}).catch(()=>{}); }
+    function announce(){ post(topic+"-w",{k:"state",title,confetti:fx.confetti,winners:winners.map(w=>({id:w.id,name:w.name}))}).catch(()=>{}); }
+
+    /* ---- sound + effects settings ---- */
+    const fx = Object.assign({music:"gameshow",vol:50,drum:true,confetti:true,blip:true}, store.get("raffle.fx",{}));
+    function saveFx(){ store.set("raffle.fx",fx); }
+    let uploadUrl=null, uploadName="";
+    $("musicSel").value = fx.music==="upload" ? "gameshow" : fx.music;
+    $("musicVol").value=fx.vol; $("fxDrum").checked=fx.drum; $("fxConfetti").checked=fx.confetti; $("fxBlip").checked=fx.blip;
+    MusicStore.get().then(rec=>{
+      if(!rec||!rec.blob) return;
+      uploadUrl=URL.createObjectURL(rec.blob); uploadName=rec.name||"your file";
+      $("uploadOpt").disabled=false; $("uploadOpt").textContent="Your music: "+uploadName;
+      if(fx.music==="upload") $("musicSel").value="upload";
+    });
+    function syncPlayBtn(){ $("musicPlay").textContent = Sound.isPlaying() ? "Stop music" : "Play music"; }
+    function startMusic(){
+      Sound.setVolume(fx.vol/100);
+      const ok=Sound.playMusic($("musicSel").value, uploadUrl);
+      if(!ok) $("musicMsg").textContent="Your browser blocked audio. Click Play music again.";
+      syncPlayBtn();
+    }
+    $("musicPlay").onclick=()=>{ if(Sound.isPlaying()){ Sound.stopMusic(); syncPlayBtn(); } else startMusic(); };
+    $("musicSel").onchange=()=>{ fx.music=$("musicSel").value; saveFx(); if(Sound.isPlaying()) startMusic(); };
+    $("musicVol").oninput=()=>{ fx.vol=+$("musicVol").value; saveFx(); Sound.setVolume(fx.vol/100); };
+    $("uploadBtn").onclick=()=>$("musicFile").click();
+    $("musicFile").onchange=async()=>{
+      const f=$("musicFile").files[0]; if(!f) return;
+      if(!/^audio\//.test(f.type) && !/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)){ $("musicMsg").textContent="That file isn't audio. Pick an MP3, WAV or M4A."; return; }
+      if(uploadUrl) URL.revokeObjectURL(uploadUrl);
+      uploadUrl=URL.createObjectURL(f); uploadName=f.name;
+      $("uploadOpt").disabled=false; $("uploadOpt").textContent="Your music: "+uploadName; $("musicSel").value="upload";
+      fx.music="upload"; saveFx();
+      const kept=await MusicStore.put(f);
+      $("musicMsg").textContent = kept ? "Added "+uploadName+". It will still be here after a refresh." : "Added "+uploadName+" for now. Upload it again if you refresh the page.";
+      startMusic();
+    };
+    $("fxDrum").onchange=()=>{ fx.drum=$("fxDrum").checked; saveFx(); };
+    $("fxConfetti").onchange=()=>{ fx.confetti=$("fxConfetti").checked; saveFx(); };
+    $("fxBlip").onchange=()=>{ fx.blip=$("fxBlip").checked; saveFx(); };
+    $("testFx").onclick=async()=>{ Sound.unlock(); if(fx.drum) Sound.drumroll(2); await new Promise(r=>setTimeout(r,2000)); if(fx.drum) Sound.fanfare(); if(fx.confetti) celebrate(true); };
+    document.addEventListener("pointerdown",()=>Sound.unlock(),{once:true});
 
     $("drawBtn").onclick=async()=>{
       const p=pool(); if(!p.length||rolling) return;
+      Sound.unlock();
       const pick=p[randInt(p.length)]; rolling=true; $("drawBtn").disabled=true;
       const el=$("stageName"); el.className="stage-name rolling"; $("stageTag").textContent="Drawing…";
+      const D = fx.drum ? 3400 : 2600;
+      if(fx.drum) Sound.drumroll(D/1000);
       if(!matchMedia("(prefers-reduced-motion: reduce)").matches){
-        let delay=45,total=0; while(total<2600){ el.textContent=p[randInt(p.length)].name; await new Promise(r=>setTimeout(r,delay)); total+=delay; delay=Math.min(260,delay*1.12); }
-      }
+        let delay=45,total=0; while(total<D){ el.textContent=p[randInt(p.length)].name; await new Promise(r=>setTimeout(r,delay)); total+=delay; delay=Math.min(280,delay*1.1); }
+      } else if(fx.drum) await new Promise(r=>setTimeout(r,D));
       winners.push({id:pick.id,name:pick.name,at:Date.now()}); rolling=false; save(); render(); announce();
+      if(fx.drum) Sound.fanfare();
+      if(fx.confetti) celebrate(true);
     };
 
     let pending=null;
@@ -401,11 +645,38 @@ details summary{cursor:pointer;font-weight:600}
       $("eventTitle").textContent=state.title; $("joinTitle").textContent=state.title; document.title=state.title;
       if(myName && !editing){ $("joinForm").hidden=true; $("joined").hidden=false; $("myName").textContent=myName; }
       else { $("joinForm").hidden=false; $("joined").hidden=true; }
-      const last=state.winners[state.winners.length-1];
-      if(last){ $("lastWin").hidden=false; $("lastWin").textContent = last.id===device ? "You were drawn! Head to the front." : "Latest winner: "+clean(last.name); }
+      const last=state.winners[state.winners.length-1], mine=!!last && last.id===device;
+      if(last){ $("lastWin").hidden=false; $("lastWin").className = mine ? "notice you-won" : "notice"; $("lastWin").textContent = mine ? "You won! Head to the front." : "Latest winner: "+clean(last.name); }
       else $("lastWin").hidden=true;
+      $("soundOn").hidden = Sound.ready(); $("soundOk").hidden = !Sound.ready();
     }
-    listen(topic+"-w",b=>{ if(b.k==="state"){ state={title:clean(b.title)||"Hall Raffle",winners:Array.isArray(b.winners)?b.winners.slice(0,200):[]}; render(); } });
+    function unlockSound(){ Sound.unlock(); setTimeout(render,150); }
+    $("soundOn").onclick=unlockSound;
+    document.addEventListener("pointerdown",unlockSound,{once:true});
+
+    /* Effects fire only for winners drawn while this page is open, not for
+       ones replayed from earlier or already seen before a refresh. */
+    let seen=0, live=false, armed=false;
+    function onNewWinner(w, confettiOn){
+      const lw=$("lastWin");
+      if(w.id===device){
+        if(confettiOn!==false) celebrate(true);
+        Sound.fanfare();
+        try{ navigator.vibrate && navigator.vibrate([250,120,250,120,600]); }catch(_){}
+      } else {
+        Sound.chime();
+        try{ navigator.vibrate && navigator.vibrate(60); }catch(_){}
+      }
+      lw.classList.remove("flash"); void lw.offsetWidth; lw.classList.add("flash");
+    }
+    listen(topic+"-w",b=>{
+      if(b.k!=="state") return;
+      state={title:clean(b.title)||"Hall Raffle",winners:Array.isArray(b.winners)?b.winners.slice(0,200):[]};
+      render();
+      const n=state.winners.length;
+      if(live && n>seen) onNewWinner(state.winners[n-1], b.confetti);
+      seen=n;   // while replaying history this just tracks the latest count
+    }, ok=>{ if(ok && !armed){ armed=true; setTimeout(()=>live=true,2000); } });
     $("editName").onclick=()=>{ editing=true; $("nameInput").value=myName; render(); $("nameInput").focus(); };
     $("joinForm").addEventListener("submit",async ev=>{
       ev.preventDefault(); $("joinErr").hidden=true;
